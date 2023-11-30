@@ -1,0 +1,24 @@
+# CMake-generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+build/
+
+# CPP source files
+*~
+*.o
+*.so
+
+# CUDA source files
+*.ii
+*.cu
+*.ptx
+*.cubin
+*.fatbin
+
+# Video output files
+*.mp4
+*.webm
+
+subject/
