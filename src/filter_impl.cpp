@@ -75,45 +75,6 @@ int frame_count = 0;
 uint8_t low_threshold = 40;
 uint8_t high_threshold = 50;
 
-lab rgbToLab(rgb color)
-{
-    // Convert RGB to XYZ
-    uint8_t X = (0.4124564 * color.r + 0.3575761 * color.g + 0.1804674 * color.b) / 255.0;
-    uint8_t Y = (0.2126729 * color.r + 0.7152282 * color.g + 0.072099 * color.b) / 255.0;
-    uint8_t Z = (0.0193339 * color.r + 0.1191920 * color.g + 0.9503041 * color.b) / 255.0;
-
-    // Convert XYZ to CIE L*a*b*
-    uint8_t L = 116.0 * pow(Y / 0.008856, 1.0 / 3.0) - 16.0;
-    uint8_t a = 500.0 * (pow(X / 0.950456, 1.0 / 3.0) - pow(Y / 1.0, 1.0 / 3.0));
-    uint8_t b = 200.0 * (pow(Y / 1.0, 1.0 / 3.0) - pow(Z / 1.07700, 1.0 / 3.0));
-
-    return {.L = L, .a = a, .b = b};
-}
-
-rgb labToRGB(lab &pixel)
-{
-    // Convert CIE L*a*b* to XYZ
-    double X = (pixel.L + 16.0) / 116.0;
-    double Y = (X * 0.008856 + 16.0) / 116.0;
-    double Z = Y / 1.181678;
-
-    double r = 3.240479 * X - 1.537383 * Y - 0.498531 * Z;
-    double g = -0.969256 * X + 1.875991 * Y + 0.041556 * Z;
-    double b = 0.055648 * X - 0.201966 * Y + 1.253272 * Z;
-
-    // Convert XYZ to RGB
-    r = 255.0 * r;
-    g = 255.0 * g;
-    b = 255.0 * b;
-
-    // Clamp values to valid RGB range
-    r = std::max(0.0, std::min(255.0, r));
-    g = std::max(0.0, std::min(255.0, g));
-    b = std::max(0.0, std::min(255.0, b));
-
-    return {.r = (uint8_t)r, .g = (uint8_t)g, .b = (uint8_t)b};
-}
-
 // Function to convert RGB image to grayscale using the luminosity method
 void rgbToGrayscale(uint8_t *buffer, int width, int height, int stride)
 {
@@ -127,16 +88,6 @@ void rgbToGrayscale(uint8_t *buffer, int width, int height, int stride)
             lineptr[x].b = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
         }
     }
-}
-
-rgb computeDistance(rgb a, rgb b)
-{
-    lab lab_a = rgbToLab(a);
-    lab lab_b = rgbToLab(b);
-
-    uint8_t delta = sqrt(pow(lab_b.L - lab_a.L, 2.0) + pow(lab_b.a - lab_a.a, 2.0) + pow(lab_b.b - lab_a.b, 2.0));
-    lab result = {.L = delta, .a = delta, .b = delta};
-    return labToRGB(result);
 }
 
 void erosion(uint8_t *buffer, int width, int height, int stride)
@@ -248,6 +199,55 @@ void threshold(uint8_t *buffer, int width, int height, int stride)
             }
         }
     }
+}
+
+lab rgbToLab(rgb color)
+{
+    // Convert RGB to XYZ
+    uint8_t X = (0.4124564 * color.r + 0.3575761 * color.g + 0.1804674 * color.b) / 255.0;
+    uint8_t Y = (0.2126729 * color.r + 0.7152282 * color.g + 0.072099 * color.b) / 255.0;
+    uint8_t Z = (0.0193339 * color.r + 0.1191920 * color.g + 0.9503041 * color.b) / 255.0;
+
+    // Convert XYZ to CIE L*a*b*
+    uint8_t L = 116.0 * pow(Y / 0.008856, 1.0 / 3.0) - 16.0;
+    uint8_t a = 500.0 * (pow(X / 0.950456, 1.0 / 3.0) - pow(Y / 1.0, 1.0 / 3.0));
+    uint8_t b = 200.0 * (pow(Y / 1.0, 1.0 / 3.0) - pow(Z / 1.07700, 1.0 / 3.0));
+
+    return {.L = L, .a = a, .b = b};
+}
+
+rgb labToRGB(lab &pixel)
+{
+    // Convert CIE L*a*b* to XYZ
+    double X = (pixel.L + 16.0) / 116.0;
+    double Y = (X * 0.008856 + 16.0) / 116.0;
+    double Z = Y / 1.181678;
+
+    double r = 3.240479 * X - 1.537383 * Y - 0.498531 * Z;
+    double g = -0.969256 * X + 1.875991 * Y + 0.041556 * Z;
+    double b = 0.055648 * X - 0.201966 * Y + 1.253272 * Z;
+
+    // Convert XYZ to RGB
+    r = 255.0 * r;
+    g = 255.0 * g;
+    b = 255.0 * b;
+
+    // Clamp values to valid RGB range
+    r = std::max(0.0, std::min(255.0, r));
+    g = std::max(0.0, std::min(255.0, g));
+    b = std::max(0.0, std::min(255.0, b));
+
+    return {.r = (uint8_t)r, .g = (uint8_t)g, .b = (uint8_t)b};
+}
+
+rgb computeDistance(rgb a, rgb b)
+{
+    lab lab_a = rgbToLab(a);
+    lab lab_b = rgbToLab(b);
+
+    uint8_t delta = sqrt(pow(lab_b.L - lab_a.L, 2.0) + pow(lab_b.a - lab_a.a, 2.0) + pow(lab_b.b - lab_a.b, 2.0));
+    lab result = {.L = delta, .a = delta, .b = delta};
+    return labToRGB(result);
 }
 
 void image_diff(uint8_t *buffer, int width, int height, int stride)
