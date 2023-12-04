@@ -34,114 +34,12 @@ struct lab
     uint8_t L, a, b;
 };
 
-// TODO: Implement hyterisis thresholding
-void hysteresisThresholding(uint8_t *buffer, int width, int height, int stride, int pixel_stride, uint8_t seil_activation, uint8_t seil_suppression)
-{
-    // Create a new buffer to store the result
-    uint8_t *result = new uint8_t[width * height];
-
-    // Apply the hysteresis thresholding
-    for (int y = 0; y < height; y++)
-    {
-        for (int x = 0; x < width; x++)
-        {
-            uint8_t *pixel = buffer + y * stride + x * pixel_stride;
-            if (*pixel >= seil_activation)
-            {
-                result[y * width + x] = 255;
-            }
-            else if (*pixel <= seil_suppression)
-            {
-                result[y * width + x] = 0;
-            }
-            else
-            {
-                result[y * width + x] = (*pixel > result[(y - 1) * width + x - 1] && *pixel > result[(y - 1) * width + x + 1]) ? 255 : 0;
-            }
-        }
-    }
-
-    // Copy the result back into the original buffer
-    memcpy(buffer, result, width * height);
-
-    // Clean up
-    delete[] result;
-}
-
-void erosion(uint8_t *buffer, int width, int height, int stride, int pixel_stride)
-{
-    // Définir la taille du voisinage
-    int rayon = 3;
-    for (int y = 0; y < height; y++)
-    {
-        rgb *lineptr = (rgb *)(buffer + y * stride);
-        for (int x = 0; x < width; x++)
-        {
-            for (int dy = -rayon; dy <= rayon; dy++)
-            {
-                rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
-                for (int dx = -rayon; dx <= rayon; dx++)
-                {
-                    if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
-                        continue;
-                    else if (sqrt(pow(x + dx, 2) + pow(y + dy, 2)) > rayon)
-                        continue;
-                    uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
-                    if (sum < lineptr[x].r + lineptr[x].g + lineptr[x].b)
-                    {
-                        lineptr[x] = lineptr_comp[x + dx];
-                    }
-                }
-            }
-        }
-    }
-}
-
-void dilation(uint8_t *buffer, int width, int height, int stride, int pixel_stride)
-{
-    // Définir la taille du voisinage
-    int rayon = 3;
-    for (int y = 0; y < height; y++)
-    {
-        rgb *lineptr = (rgb *)(buffer + y * stride);
-        for (int x = 0; x < width; x++)
-        {
-            for (int dy = -rayon; dy <= rayon; dy++)
-            {
-                rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
-                for (int dx = -rayon; dx <= rayon; dx++)
-                {
-                    if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
-                        continue;
-                    else if (sqrt(pow(dx, 2) + pow(dy, 2)) > rayon)
-                        continue;
-                    uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
-                    if (sum > lineptr[x].r + lineptr[x].g + lineptr[x].b)
-                    {
-                        lineptr[x] = lineptr_comp[x + dx];
-                    }
-                }
-            }
-        }
-    }
-}
-
-void threshold(uint8_t *buffer, int width, int height, int stride, int pixel_stride, uint8_t seil_activation)
-{
-    // Définir la taille du voisinage
-    uint8_t *buffer2 = new uint8_t[width * height * pixel_stride];
-    for (int y = 0; y < height; y++)
-    {
-        rgb *lineptr = (rgb *)(buffer + y * stride);
-        for (int x = 0; x < width; x++)
-        {
-            if (lineptr[x].r > seil_activation || lineptr[x].g > seil_activation || lineptr[x].b > seil_activation)
-                lineptr[x] = {.r = 255, .g = 255, .b = 255};
-            else
-                lineptr[x] = {.r = 0, .g = 0, .b = 0};
-        }
-    }
-}
+// Définir la taille du voisinage
+int rayon = 3;
+uint8_t *background = nullptr;
+int frame_count = 0;
+uint8_t low_threshold = 30;
+uint8_t high_threshold = 80;
 
 lab rgbToLab(rgb color)
 {
@@ -182,6 +80,21 @@ rgb labToRGB(lab &pixel)
     return {.r = (uint8_t)r, .g = (uint8_t)g, .b = (uint8_t)b};
 }
 
+// Function to convert RGB image to grayscale using the luminosity method
+void rgbToGrayscale(uint8_t *buffer, int width, int height, int stride)
+{
+    for (int y = 0; y < height; y++)
+    {
+        rgb *lineptr = (rgb *)(buffer + y * stride);
+        for (int x = 0; x < width; x++)
+        {
+            lineptr[x].r = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
+            lineptr[x].g = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
+            lineptr[x].b = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
+        }
+    }
+}
+
 rgb computeDistance(rgb a, rgb b)
 {
     lab lab_a = rgbToLab(a);
@@ -192,10 +105,104 @@ rgb computeDistance(rgb a, rgb b)
     return labToRGB(result);
 }
 
-uint8_t *background = nullptr;
-int frame_count = 0;
+void erosion(uint8_t *buffer, int width, int height, int stride)
+{
+    // Définir la taille du voisinage
+    for (int y = 0; y < height; y++)
+    {
+        rgb *lineptr = (rgb *)(buffer + y * stride);
+        for (int x = 0; x < width; x++)
+        {
+            for (int dy = -rayon; dy <= rayon; dy++)
+            {
+                rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
+                for (int dx = -rayon; dx <= rayon; dx++)
+                {
+                    if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
+                        continue;
+                    else if (sqrt(pow(x + dx, 2) + pow(y + dy, 2)) > rayon)
+                        continue;
+                    uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
+                    if (sum < lineptr[x].r + lineptr[x].g + lineptr[x].b)
+                    {
+                        lineptr[x] = lineptr_comp[x + dx];
+                    }
+                }
+            }
+        }
+    }
+}
 
-void image_diff(uint8_t *buffer, int width, int height, int stride, int pixel_stride)
+void dilation(uint8_t *buffer, int width, int height, int stride)
+{
+    for (int y = 0; y < height; y++)
+    {
+        rgb *lineptr = (rgb *)(buffer + y * stride);
+        for (int x = 0; x < width; x++)
+        {
+            for (int dy = -rayon; dy <= rayon; dy++)
+            {
+                rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
+                for (int dx = -rayon; dx <= rayon; dx++)
+                {
+                    if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
+                        continue;
+                    else if (sqrt(pow(dx, 2) + pow(dy, 2)) > rayon)
+                        continue;
+                    uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
+                    if (sum > lineptr[x].r + lineptr[x].g + lineptr[x].b)
+                    {
+                        lineptr[x] = lineptr_comp[x + dx];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/*
+in block -> mem
+access mem -> faster
+*/
+void threshold(uint8_t *buffer, int width, int height, int stride)
+{
+    for (int y = 0; y < height; y++)
+    {
+        rgb *lineptr = (rgb *)(buffer + y * stride);
+        for (int x = 0; x < width; x++)
+        {
+            // strong edges
+            if (lineptr[x].r >= high_threshold || lineptr[x].g >= high_threshold || lineptr[x].b >= high_threshold)
+                lineptr[x] = {.r = 255, .g = 255, .b = 255};
+            // check connectivity to strong edges
+            else if (lineptr[x].r > low_threshold || lineptr[x].g > low_threshold || lineptr[x].b > low_threshold)
+            {
+                // Weak edge, check for strong neighbors
+                for (int dy = -rayon; dy <= rayon; dy++)
+                {
+                    rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
+                    for (int dx = -rayon; dx <= rayon; dx++)
+                    {
+                        if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
+                            continue;
+                        // Check if the neighbor is within bounds and has a strong edge
+                        if (lineptr_comp[x].r >= high_threshold || lineptr_comp[x].g >= high_threshold || lineptr_comp[x].b >= high_threshold)
+                        {
+                            lineptr[x] = {.r = 255, .g = 255, .b = 255};
+                            break;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                lineptr[x] = {.r = 0, .g = 0, .b = 0};
+            }
+        }
+    }
+}
+
+void image_diff(uint8_t *buffer, int width, int height, int stride)
 {
     for (int y = 0; y < height; ++y)
     {
@@ -240,9 +247,11 @@ extern "C"
         4. Apply mask
         */
         update_background(buffer, width, height, stride, pixel_stride);
-        image_diff(buffer, width, height, stride, pixel_stride);
-        erosion(buffer, width, height, stride, pixel_stride);
-        dilation(buffer, width, height, stride, pixel_stride);
+        image_diff(buffer, width, height, stride);
+        erosion(buffer, width, height, stride);
+        dilation(buffer, width, height, stride);
+        rgbToGrayscale(buffer, width, height, stride);
+        threshold(buffer, width, height, stride);
         // You can fake a long-time process with sleep
         {
             using namespace std::chrono_literals;
