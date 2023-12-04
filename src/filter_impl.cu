@@ -23,6 +23,20 @@ void check(T err, const char *const func, const char *const file,
 struct rgb
 {
     uint8_t r, g, b;
+
+    bool operator>(const int &threshold) const
+    {
+        return r > threshold || g > threshold || b > threshold;
+    }
+
+    rgb operator+(const rgb &other) const
+    {
+        rgb result;
+        result.r = r + other.r;
+        result.g = g + other.g;
+        result.b = b + other.b;
+        return result;
+    }
 };
 
 struct lab
@@ -58,6 +72,90 @@ __global__ void remove_red_channel_inp(std::byte *buffer, int width, int height,
     else
     {
         lineptr[x].r = 0;
+    }
+}
+
+__global__ void apply_mask(std::byte *input, std::byte *buffer, int width, int height, int stride)
+{
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    rgb *mask_lineptr = (rgb *)(buffer + y * stride);
+    rgb *input_lineptr = (rgb *)(input + y * stride);
+    // apply red if on target
+    if (mask_lineptr[x].r == 255)
+        mask_lineptr[x] = {.r = 255, .g = 0, .b = 0};
+
+    mask_lineptr[x].r = input_lineptr[x].r + 0.5 * mask_lineptr[x].r;
+    mask_lineptr[x].g = input_lineptr[x].g + 0.5 * mask_lineptr[x].g;
+    mask_lineptr[x].b = input_lineptr[x].b + 0.5 * mask_lineptr[x].b;
+}
+
+__global__ void threshold(std::byte *buffer, int width, int height, int stride, int low_threshold, int high_threshold)
+{
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int rayon = 3;
+
+    rgb *lineptr = (rgb *)(buffer + y * stride);
+    // strong edges
+    if (lineptr[x].r > high_threshold || lineptr[x].g > high_threshold || lineptr[x].b > high_threshold)
+        lineptr[x] = {.r = 255, .g = 255, .b = 255};
+    // check connectivity to strong edges
+    else if (lineptr[x].r > low_threshold || lineptr[x].g > low_threshold || lineptr[x].b > low_threshold)
+    {
+        // Weak edge, check for strong neighbors
+        for (int dy = -rayon; dy <= rayon; dy++)
+        {
+            rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
+            for (int dx = -rayon; dx <= rayon; dx++)
+            {
+                if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
+                    continue;
+                // Check if the neighbor is within bounds and has a strong edge
+                if (lineptr_comp[x].r > high_threshold || lineptr_comp[x].g > high_threshold || lineptr_comp[x].b > high_threshold)
+                {
+                    lineptr[x] = {.r = 255, .g = 255, .b = 255};
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        lineptr[x] = {.r = 0, .g = 0, .b = 0};
+    }
+}
+
+__global__ void rgbToGrayscale(std::byte *buffer, int width, int height, int stride)
+{
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    rgb *lineptr = (rgb *)(buffer + y * stride);
+    lineptr[x].r = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
+    lineptr[x].g = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
+    lineptr[x].b = 0.21 * lineptr[x].r + 0.72 * lineptr[x].g + 0.07 * lineptr[x].b;
+}
+
+__global__ void dilation(std::byte *buffer, int width, int height, int stride)
+{
+    int rayon = 3;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (x >= width || y >= height)
+        return;
+    rgb *lineptr = (rgb *)(buffer + y * stride);
+    for (int dy = -rayon; dy <= rayon; dy++)
+    {
+        rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
+        for (int dx = -rayon; dx <= rayon; dx++)
+        {
+            if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
+                continue;
+            uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
+            if (sum > lineptr[x].r + lineptr[x].g + lineptr[x].b)
+                lineptr[x] = lineptr_comp[x + dx];
+        }
     }
 }
 
@@ -126,8 +224,6 @@ __device__ rgb labToRgb(lab &pixel)
 
 __device__ rgb computeDistance(rgb a, rgb b)
 {
-    // Implement your RGB to Lab conversion here
-    // This is a simplified version, you may want to use a more accurate conversion method
     lab lab_a = rgbToLab(a);
 
     lab lab_b = rgbToLab(b);
@@ -206,6 +302,9 @@ extern "C"
         size_t pitch;
         static int frame_count = 0;
         static std::byte *background;
+        static std::byte *input;
+        const int low_threshold = 40;
+        const int high_threshold = 50;
 
         cudaError_t err;
 
@@ -213,6 +312,12 @@ extern "C"
         CHECK_CUDA_ERROR(err);
 
         err = cudaMemcpy2D(dBuffer, pitch, src_buffer, src_stride, width * sizeof(rgb), height, cudaMemcpyDefault);
+        CHECK_CUDA_ERROR(err);
+
+        err = cudaMallocPitch(&input, &pitch, width * sizeof(rgb), height);
+        CHECK_CUDA_ERROR(err);
+
+        err = cudaMemcpy2D(input, pitch, src_buffer, src_stride, width * sizeof(rgb), height, cudaMemcpyDefault);
         CHECK_CUDA_ERROR(err);
 
         dim3 blockSize(16, 16);
@@ -232,9 +337,17 @@ extern "C"
 
         updateBackground<<<gridSize, blockSize>>>(dBuffer, background, width, height, src_stride);
 
-        // imageDiff<<<gridSize, blockSize>>>(dBuffer, background, width, height, src_stride);
+        imageDiff<<<gridSize, blockSize>>>(dBuffer, background, width, height, src_stride);
 
-        // erosion<<<gridSize, blockSize>>>(dBuffer, width, height, src_stride);
+        erosion<<<gridSize, blockSize>>>(dBuffer, width, height, src_stride);
+
+        dilation<<<gridSize, blockSize>>>(dBuffer, width, height, src_stride);
+
+        rgbToGrayscale<<<gridSize, blockSize>>>(dBuffer, width, height, src_stride);
+
+        threshold<<<gridSize, blockSize>>>(dBuffer, width, height, src_stride, low_threshold, high_threshold);
+
+        apply_mask<<<gridSize, blockSize>>>(input, dBuffer, width, height, src_stride);
 
         // end of process (dBuffer is copied into src_buffer)
         err = cudaMemcpy2D(src_buffer, src_stride, dBuffer, pitch, width * sizeof(rgb), height, cudaMemcpyDefault);
