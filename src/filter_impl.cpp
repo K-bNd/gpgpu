@@ -27,6 +27,31 @@ struct rgb
         result.b = b / other;
         return result;
     }
+
+    bool operator!=(const rgb &other) const
+    {
+        return r != other.r || g != other.g || b != other.b;
+    }
+
+    bool operator>(const int &threshold) const
+    {
+        return r > threshold || g > threshold || b > threshold;
+    }
+
+    bool operator>=(const int &threshold) const
+    {
+        return r >= threshold || g >= threshold || b >= threshold;
+    }
+
+    bool operator<(const int &threshold) const
+    {
+        return r < threshold || g < threshold || b < threshold;
+    }
+
+    bool operator<=(const int &threshold) const
+    {
+        return r <= threshold || g <= threshold || b <= threshold;
+    }
 };
 
 struct lab
@@ -39,7 +64,7 @@ int rayon = 3;
 uint8_t *background = nullptr;
 int frame_count = 0;
 uint8_t low_threshold = 30;
-uint8_t high_threshold = 80;
+uint8_t high_threshold = 50;
 
 lab rgbToLab(rgb color)
 {
@@ -164,6 +189,7 @@ void dilation(uint8_t *buffer, int width, int height, int stride)
 in block -> mem
 access mem -> faster
 */
+
 void threshold(uint8_t *buffer, int width, int height, int stride)
 {
     for (int y = 0; y < height; y++)
@@ -171,11 +197,13 @@ void threshold(uint8_t *buffer, int width, int height, int stride)
         rgb *lineptr = (rgb *)(buffer + y * stride);
         for (int x = 0; x < width; x++)
         {
+            // if (lineptr[x] != ref)
+            //     printf("Pixel: red = %d, green = %d, blue = %d\n", lineptr[x].r, lineptr[x].g, lineptr[x].b);
             // strong edges
-            if (lineptr[x].r >= high_threshold || lineptr[x].g >= high_threshold || lineptr[x].b >= high_threshold)
+            if (lineptr[x] > high_threshold)
                 lineptr[x] = {.r = 255, .g = 255, .b = 255};
             // check connectivity to strong edges
-            else if (lineptr[x].r > low_threshold || lineptr[x].g > low_threshold || lineptr[x].b > low_threshold)
+            else if (lineptr[x] > low_threshold)
             {
                 // Weak edge, check for strong neighbors
                 for (int dy = -rayon; dy <= rayon; dy++)
@@ -186,7 +214,7 @@ void threshold(uint8_t *buffer, int width, int height, int stride)
                         if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
                             continue;
                         // Check if the neighbor is within bounds and has a strong edge
-                        if (lineptr_comp[x].r >= high_threshold || lineptr_comp[x].g >= high_threshold || lineptr_comp[x].b >= high_threshold)
+                        if (lineptr_comp[x] > high_threshold)
                         {
                             lineptr[x] = {.r = 255, .g = 255, .b = 255};
                             break;
