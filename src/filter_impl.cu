@@ -25,6 +25,11 @@ struct rgb
     uint8_t r, g, b;
 };
 
+struct lab
+{
+    uint8_t L, a, b;
+};
+
 __constant__ uint8_t *logo;
 
 /// @brief Black out the red channel from the video and add EPITA's logo
@@ -56,10 +61,100 @@ __global__ void remove_red_channel_inp(std::byte *buffer, int width, int height,
     }
 }
 
-#include <cuda_runtime.h>
+__global__ void erosion(std::byte *buffer, int width, int height, int stride)
+{
+    int rayon = 3;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (x >= width || y >= height)
+        return;
+    rgb *lineptr = (rgb *)(buffer + y * stride);
+
+    for (int dy = -rayon; dy <= rayon; dy++)
+    {
+        rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
+        for (int dx = -rayon; dx <= rayon; dx++)
+        {
+            if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
+                continue;
+            uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
+            if (sum < lineptr[x].r + lineptr[x].g + lineptr[x].b)
+                lineptr[x] = lineptr_comp[x + dx];
+        }
+    }
+}
+
+__device__ lab rgbToLab(rgb color)
+{
+    // Convert RGB to XYZ
+    uint8_t X = (0.4124564 * color.r + 0.3575761 * color.g + 0.1804674 * color.b) / 255.0;
+    uint8_t Y = (0.2126729 * color.r + 0.7152282 * color.g + 0.072099 * color.b) / 255.0;
+    uint8_t Z = (0.0193339 * color.r + 0.1191920 * color.g + 0.9503041 * color.b) / 255.0;
+
+    // Convert XYZ to CIE L*a*b*
+    uint8_t L = 116.0 * pow(Y / 0.008856, 1.0 / 3.0) - 16.0;
+    uint8_t a = 500.0 * (pow(X / 0.950456, 1.0 / 3.0) - pow(Y / 1.0, 1.0 / 3.0));
+    uint8_t b = 200.0 * (pow(Y / 1.0, 1.0 / 3.0) - pow(Z / 1.07700, 1.0 / 3.0));
+
+    return {.L = L, .a = a, .b = b};
+}
+
+__device__ rgb labToRgb(lab &pixel)
+{
+    // Convert CIE L*a*b* to XYZ
+    double X = (pixel.L + 16.0) / 116.0;
+    double Y = (X * 0.008856 + 16.0) / 116.0;
+    double Z = Y / 1.181678;
+
+    double r = 3.240479 * X - 1.537383 * Y - 0.498531 * Z;
+    double g = -0.969256 * X + 1.875991 * Y + 0.041556 * Z;
+    double b = 0.055648 * X - 0.201966 * Y + 1.253272 * Z;
+
+    // Convert XYZ to RGB
+    r = 255.0 * r;
+    g = 255.0 * g;
+    b = 255.0 * b;
+
+    // Clamp values to valid RGB range
+    r = max(0.0, min(255.0, r));
+    g = max(0.0, min(255.0, g));
+    b = max(0.0, min(255.0, b));
+
+    return {.r = (uint8_t)r, .g = (uint8_t)g, .b = (uint8_t)b};
+}
+
+__device__ rgb computeDistance(rgb a, rgb b)
+{
+    // Implement your RGB to Lab conversion here
+    // This is a simplified version, you may want to use a more accurate conversion method
+    lab lab_a = rgbToLab(a);
+
+    lab lab_b = rgbToLab(b);
+
+    uint8_t delta = sqrt(pow(lab_b.L - lab_a.L, 2.0) + pow(lab_b.a - lab_a.a, 2.0) + pow(lab_b.b - lab_a.b, 2.0));
+
+    lab result = {delta, delta, delta};
+    return labToRgb(result);
+}
+
+// CUDA kernel to perform image difference
+__global__ void imageDiff(std::byte *buffer, std::byte *background, int width, int height, int stride)
+{
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (x >= width || y >= height)
+        return;
+
+    rgb *lineptr = (rgb *)(buffer + y * stride);
+    rgb *lineptr_background = (rgb *)(background + y * stride);
+
+    lineptr[x] = computeDistance(lineptr[x], lineptr_background[x]);
+}
 
 // CUDA kernel to update the background
-__global__ void updateBackgroundKernel(std::byte *buffer, std::byte *background, int width, int height, int stride, int pixel_stride)
+__global__ void updateBackground(std::byte *buffer, std::byte *background, int width, int height, int stride)
 {
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -110,7 +205,7 @@ extern "C"
         std::byte *dBuffer;
         size_t pitch;
         static int frame_count = 0;
-        static std::byte *background = nullptr;
+        static std::byte *background;
 
         cudaError_t err;
 
@@ -128,19 +223,25 @@ extern "C"
 
         if (frame_count == 1)
         {
-            cudaMalloc((void **)&background, width * height * pixel_stride);
-            cudaMemcpy(background, dBuffer, width * height * pixel_stride, cudaMemcpyHostToDevice);
-            return;
+            err = cudaMallocPitch(&background, &pitch, width * sizeof(rgb), height);
+            CHECK_CUDA_ERROR(err);
+
+            err = cudaMemcpy2D(background, pitch, src_buffer, src_stride, width * sizeof(rgb), height, cudaMemcpyDefault);
+            CHECK_CUDA_ERROR(err);
         }
 
-        updateBackgroundKernel<<<gridSize, blockSize>>>(dBuffer, background, width, height, src_stride, pixel_stride);
+        updateBackground<<<gridSize, blockSize>>>(dBuffer, background, width, height, src_stride);
 
-        cudaMemcpy(background, dBuffer, width * height * pixel_stride, cudaMemcpyHostToDevice);
+        // imageDiff<<<gridSize, blockSize>>>(dBuffer, background, width, height, src_stride);
 
+        // erosion<<<gridSize, blockSize>>>(dBuffer, width, height, src_stride);
+
+        // end of process (dBuffer is copied into src_buffer)
         err = cudaMemcpy2D(src_buffer, src_stride, dBuffer, pitch, width * sizeof(rgb), height, cudaMemcpyDefault);
         CHECK_CUDA_ERROR(err);
 
         cudaFree(dBuffer);
+        cudaFree(background);
 
         err = cudaDeviceSynchronize();
         CHECK_CUDA_ERROR(err);
