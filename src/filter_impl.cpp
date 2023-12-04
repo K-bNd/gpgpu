@@ -3,6 +3,7 @@
 #include <chrono>
 #include <thread>
 #include <cstring>
+#include <iostream>
 #include <cmath>
 #include "logo.h"
 
@@ -67,38 +68,31 @@ void hysteresisThresholding(uint8_t *buffer, int width, int height, int stride, 
     delete[] result;
 }
 
-rgb min(rgb a, rgb b)
-{
-    return {.r = std::min(a.r, b.r), .g = std::min(a.g, b.g), .b = std::min(a.b, b.b)};
-}
-
-rgb max(rgb a, rgb b)
-{
-    return {.r = std::max(a.r, b.r), .g = std::max(a.g, b.g), .b = std::max(a.b, b.b)};
-}
-
 void erosion(uint8_t *buffer, int width, int height, int stride, int pixel_stride)
 {
     // Définir la taille du voisinage
     int rayon = 3;
     for (int y = 0; y < height; y++)
     {
+        rgb *lineptr = (rgb *)(buffer + y * stride);
         for (int x = 0; x < width; x++)
         {
-            // Érosion
-            rgb min_value = {.r = 0, .g = 0, .b = 0};
-            rgb *lineptr = (rgb *)(buffer + y * stride);
             for (int dy = -rayon; dy <= rayon; dy++)
             {
+                rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
                 for (int dx = -rayon; dx <= rayon; dx++)
                 {
                     if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
                         continue;
-                    rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
-                    min_value = min(min_value, lineptr_comp[x + dx]);
+                    else if (sqrt(pow(x + dx, 2) + pow(y + dy, 2)) > rayon)
+                        continue;
+                    uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
+                    if (sum < lineptr[x].r + lineptr[x].g + lineptr[x].b)
+                    {
+                        lineptr[x] = lineptr_comp[x + dx];
+                    }
                 }
             }
-            lineptr[x] = min_value;
         }
     }
 }
@@ -109,22 +103,25 @@ void dilation(uint8_t *buffer, int width, int height, int stride, int pixel_stri
     int rayon = 3;
     for (int y = 0; y < height; y++)
     {
+        rgb *lineptr = (rgb *)(buffer + y * stride);
         for (int x = 0; x < width; x++)
         {
-            // Érosion
-            rgb max_value = {.r = 255, .g = 255, .b = 255};
-            rgb *lineptr = (rgb *)(buffer + y * stride);
             for (int dy = -rayon; dy <= rayon; dy++)
             {
+                rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
                 for (int dx = -rayon; dx <= rayon; dx++)
                 {
                     if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
                         continue;
-                    rgb *lineptr_comp = (rgb *)(buffer + (y + dy) * stride);
-                    max_value = max(max_value, lineptr_comp[x + dx]);
+                    else if (sqrt(pow(dx, 2) + pow(dy, 2)) > rayon)
+                        continue;
+                    uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
+                    if (sum > lineptr[x].r + lineptr[x].g + lineptr[x].b)
+                    {
+                        lineptr[x] = lineptr_comp[x + dx];
+                    }
                 }
             }
-            lineptr[x] = max_value;
         }
     }
 }
@@ -238,19 +235,17 @@ extern "C"
         /*
         Pseudo-code:
         1. Image difference between current frame and background frame (done)
-        2. Morphological opening
+        2. Morphological opening (testing)
         3. Thresholding
         4. Apply mask
         */
         update_background(buffer, width, height, stride, pixel_stride);
         image_diff(buffer, width, height, stride, pixel_stride);
-        // erosion(buffer, width, height, stride, pixel_stride);
-        // dilation(buffer, width, height, stride, pixel_stride);
+        erosion(buffer, width, height, stride, pixel_stride);
+        dilation(buffer, width, height, stride, pixel_stride);
         // You can fake a long-time process with sleep
         {
             using namespace std::chrono_literals;
-            // uint8_t *background = nullptr;
-            // background_subtraction(buffer, width, height, stride, pixel_stride);
             // std::this_thread::sleep_for(100ms);
         }
     }
