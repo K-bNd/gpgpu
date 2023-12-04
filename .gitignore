@@ -12,7 +12,6 @@ build/
 
 # CUDA source files
 *.ii
-*.cu
 *.ptx
 *.cubin
 *.fatbin
