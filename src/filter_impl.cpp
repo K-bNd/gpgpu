@@ -19,7 +19,16 @@ struct rgb
         return result;
     }
 
-    rgb operator/(const int &other) const
+    rgb operator*(const float &other) const
+    {
+        rgb result;
+        result.r = r * other;
+        result.g = g * other;
+        result.b = b * other;
+        return result;
+    }
+
+    rgb operator/(const float &other) const
     {
         rgb result;
         result.r = r / other;
@@ -38,14 +47,14 @@ struct rgb
         return r > threshold || g > threshold || b > threshold;
     }
 
-    bool operator>=(const int &threshold) const
-    {
-        return r >= threshold || g >= threshold || b >= threshold;
-    }
-
     bool operator<(const int &threshold) const
     {
         return r < threshold || g < threshold || b < threshold;
+    }
+
+    bool operator>=(const int &threshold) const
+    {
+        return r >= threshold || g >= threshold || b >= threshold;
     }
 
     bool operator<=(const int &threshold) const
@@ -63,7 +72,7 @@ struct lab
 int rayon = 3;
 uint8_t *background = nullptr;
 int frame_count = 0;
-uint8_t low_threshold = 30;
+uint8_t low_threshold = 40;
 uint8_t high_threshold = 50;
 
 lab rgbToLab(rgb color)
@@ -132,7 +141,6 @@ rgb computeDistance(rgb a, rgb b)
 
 void erosion(uint8_t *buffer, int width, int height, int stride)
 {
-    // Définir la taille du voisinage
     for (int y = 0; y < height; y++)
     {
         rgb *lineptr = (rgb *)(buffer + y * stride);
@@ -145,13 +153,9 @@ void erosion(uint8_t *buffer, int width, int height, int stride)
                 {
                     if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
                         continue;
-                    else if (sqrt(pow(x + dx, 2) + pow(y + dy, 2)) > rayon)
-                        continue;
                     uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
                     if (sum < lineptr[x].r + lineptr[x].g + lineptr[x].b)
-                    {
                         lineptr[x] = lineptr_comp[x + dx];
-                    }
                 }
             }
         }
@@ -172,15 +176,31 @@ void dilation(uint8_t *buffer, int width, int height, int stride)
                 {
                     if (y + dy < 0 || y + dy >= height || x + dx < 0 || x + dx >= width)
                         continue;
-                    else if (sqrt(pow(dx, 2) + pow(dy, 2)) > rayon)
-                        continue;
                     uint8_t sum = lineptr_comp[x + dx].r + lineptr_comp[x + dx].g + lineptr_comp[x + dx].b;
                     if (sum > lineptr[x].r + lineptr[x].g + lineptr[x].b)
-                    {
                         lineptr[x] = lineptr_comp[x + dx];
-                    }
                 }
             }
+        }
+    }
+}
+
+void apply_mask(uint8_t *input, uint8_t *buffer, int width, int height, int stride)
+{
+    for (int y = 0; y < height; y++)
+    {
+        rgb *mask_lineptr = (rgb *)(buffer + y * stride);
+        rgb *input_lineptr = (rgb *)(input + y * stride);
+        for (int x = 0; x < width; x++)
+        {
+            // apply red if on target
+            if (mask_lineptr[x].r == 255)
+                mask_lineptr[x] = {.r = 255, .g = 0, .b = 0};
+
+            mask_lineptr[x].r = 0.5 * mask_lineptr[x].r;
+            mask_lineptr[x].g = 0.5 * mask_lineptr[x].g;
+            mask_lineptr[x].b = 0.5 * mask_lineptr[x].b;
+            mask_lineptr[x] = input_lineptr[x] + mask_lineptr[x];
         }
     }
 }
@@ -270,16 +290,23 @@ extern "C"
         /*
         Pseudo-code:
         1. Image difference between current frame and background frame (done)
-        2. Morphological opening (testing)
-        3. Thresholding
-        4. Apply mask
+        2. Morphological opening (weak)
+        3. Thresholding (works)
+        4. Apply mask (done)
         */
+
+        uint8_t *input = new uint8_t[width * height * pixel_stride];
+        std::memcpy(input, buffer, width * height * pixel_stride);
         update_background(buffer, width, height, stride, pixel_stride);
         image_diff(buffer, width, height, stride);
         erosion(buffer, width, height, stride);
         dilation(buffer, width, height, stride);
         rgbToGrayscale(buffer, width, height, stride);
         threshold(buffer, width, height, stride);
+
+        // the current buffer frame is now a mask we can apply on input for final result
+        apply_mask(input, buffer, width, height, stride);
+
         // You can fake a long-time process with sleep
         {
             using namespace std::chrono_literals;
