@@ -355,6 +355,7 @@ extern "C"
 
         cudaFree(dBuffer);
         cudaFree(background);
+        cudaFree(input);
 
         err = cudaDeviceSynchronize();
         CHECK_CUDA_ERROR(err);
